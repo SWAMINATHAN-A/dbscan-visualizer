@@ -261,23 +261,147 @@ if df is not None:
                     )
             ax.margins(0.1)
 
-        # STEP 2 — ε Neighborhoods: every point gets a circle
+        # STEP 2 — ε Neighborhoods: clean density heatmap + spotlight circle
         elif step == 2:
-            ax.scatter(X[:, 0], X[:, 1], color="steelblue", s=30, alpha=0.8, zorder=5)
-            if show_circles:
-                for p in X:
-                    circle = plt.Circle(
-                        (p[0], p[1]), eps,
-                        fill=False, color="steelblue",
-                        linewidth=0.6, linestyle="--", alpha=0.4
-                    )
-                    ax.add_patch(circle)
-                ax.set_aspect("equal")
-                ax.autoscale_view()
-            else:
-                st.info("ℹ️ ε circles hidden for datasets > 100 points.")
-            ax.margins(0.1)
-            ax.set_title(f"Step 2: Every point gets an imaginary ε = {eps} circle")
+            from scipy.spatial import cKDTree
+            plt.close(fig)  # discard the plain fig, build a custom layout
+
+            tree         = cKDTree(X)
+            neighbor_cnt = np.array([
+                len(tree.query_ball_point(p, eps)) - 1 for p in X
+            ])
+
+            x_min, x_max = X[:, 0].min(), X[:, 0].max()
+            y_min, y_max = X[:, 1].min(), X[:, 1].max()
+            pad_x = max((x_max - x_min) * 0.12, 1.0)
+            pad_y = max((y_max - y_min) * 0.12, 1.0)
+
+            # Grid for neighborhood density field
+            grid_res  = 100
+            gx = np.linspace(x_min - pad_x, x_max + pad_x, grid_res)
+            gy = np.linspace(y_min - pad_y, y_max + pad_y, grid_res)
+            GX, GY   = np.meshgrid(gx, gy)
+            grid_pts = np.c_[GX.ravel(), GY.ravel()]
+            grid_counts = np.array([
+                len(tree.query_ball_point(gp, eps)) for gp in grid_pts
+            ]).reshape(grid_res, grid_res)
+
+            # ── Figure: main scatter | side bar chart ─────────────────────
+            fig2, (ax_main, ax_bar) = plt.subplots(
+                1, 2,
+                figsize=(12, 6),
+                gridspec_kw={"width_ratios": [3, 1]},
+                facecolor="white"
+            )
+            fig2.subplots_adjust(wspace=0.35)
+
+            # ── Main: heatmap ──────────────────────────────────────────────
+            cf = ax_main.contourf(
+                GX, GY, grid_counts,
+                levels=25, cmap="magma", alpha=0.75, zorder=1
+            )
+            cbar = fig2.colorbar(cf, ax=ax_main, shrink=0.88, pad=0.02)
+            cbar.set_label("Neighbors within ε", fontsize=9, labelpad=8)
+            cbar.ax.tick_params(labelsize=8)
+
+            # MinPts contour boundary
+            ax_main.contour(
+                GX, GY, grid_counts,
+                levels=[min_samples - 0.5],
+                colors=["#00e5ff"], linewidths=1.5,
+                linestyles="--", zorder=2
+            )
+            ax_main.plot([], [], color="#00e5ff", linestyle="--",
+                         linewidth=1.5, label=f"MinPts = {min_samples} threshold")
+
+            # Scatter: color = neighbor count, size = fixed small
+            sc = ax_main.scatter(
+                X[:, 0], X[:, 1],
+                c=neighbor_cnt, cmap="cool",
+                vmin=0, vmax=neighbor_cnt.max(),
+                s=18, edgecolors="white", linewidths=0.2,
+                alpha=0.95, zorder=5
+            )
+
+            # ε spotlight on the DENSEST point
+            densest_idx = int(np.argmax(neighbor_cnt))
+            dp = X[densest_idx]
+            ax_main.add_patch(plt.Circle(
+                (dp[0], dp[1]), eps,
+                fill=True, facecolor="#00e5ff", alpha=0.15,
+                edgecolor="#00e5ff", linewidth=2.2, zorder=4
+            ))
+            # ε radius arrow
+            ax_main.annotate(
+                f"  ε = {eps}",
+                xy=(dp[0] + eps, dp[1]),
+                xytext=(dp[0] + eps + pad_x * 0.6, dp[1]),
+                arrowprops=dict(
+                    arrowstyle="-|>", color="#00e5ff",
+                    lw=1.4, mutation_scale=10
+                ),
+                fontsize=9, color="#00e5ff", fontweight="bold",
+                va="center"
+            )
+            ax_main.scatter(
+                [dp[0]], [dp[1]], s=80, color="#00e5ff",
+                edgecolors="white", linewidths=1.2, zorder=6,
+                label=f"Densest ({int(neighbor_cnt[densest_idx])} neighbors)"
+            )
+
+            ax_main.set_facecolor("#0d0d0d")
+            ax_main.set_xlabel(x_col, fontsize=10)
+            ax_main.set_ylabel(y_col, fontsize=10)
+            ax_main.set_title(
+                f"ε-Neighborhood Density Field   (ε = {eps})",
+                fontsize=12, fontweight="bold", pad=12
+            )
+            ax_main.legend(fontsize=8, loc="upper right",
+                           framealpha=0.4, labelcolor="white",
+                           facecolor="#222")
+            ax_main.tick_params(labelsize=8)
+            ax_main.set_aspect("equal")
+            ax_main.autoscale_view()
+
+            # ── Side bar: neighbor count distribution ──────────────────────
+            bins       = np.arange(0, neighbor_cnt.max() + 2)
+            counts_hist, edges = np.histogram(neighbor_cnt, bins=bins)
+            bar_colors = ["#e74c3c" if b < min_samples else "#2ecc71"
+                          for b in edges[:-1]]
+            ax_bar.barh(
+                edges[:-1], counts_hist,
+                color=bar_colors, edgecolor="white",
+                linewidth=0.3, height=0.8, align="edge"
+            )
+            ax_bar.axhline(
+                min_samples - 0.5, color="#f39c12",
+                linewidth=1.5, linestyle="--"
+            )
+            ax_bar.text(
+                ax_bar.get_xlim()[1] if counts_hist.max() == 0 else counts_hist.max() * 0.02,
+                min_samples, f"  MinPts = {min_samples}",
+                color="#f39c12", fontsize=8, va="bottom"
+            )
+            ax_bar.set_xlabel("# of points", fontsize=9)
+            ax_bar.set_ylabel("Neighbor count", fontsize=9)
+            ax_bar.set_title("Distribution", fontsize=10, fontweight="bold")
+            ax_bar.tick_params(labelsize=8)
+
+            # Legend patches for bar
+            import matplotlib.patches as mpatches
+            ax_bar.legend(
+                handles=[
+                    mpatches.Patch(color="#e74c3c", label="< MinPts (noise/border)"),
+                    mpatches.Patch(color="#2ecc71", label="≥ MinPts (core candidate)"),
+                ],
+                fontsize=7, loc="lower right"
+            )
+            ax_bar.grid(axis="x", linestyle="--", alpha=0.3)
+
+            st.pyplot(fig2)
+            plt.close(fig2)
+            # Skip the bottom ax.set_xlabel / grid — we already rendered
+            ax.set_visible(False)
 
         # STEP 3 — Core / Border / Noise  ← FIXED (was duplicate of step 5)
         elif step == 3:
@@ -358,11 +482,12 @@ if df is not None:
             ax.set_title("Step 4: Cluster Expansion — core points recruit their neighbors")
             ax.margins(0.1)
 
-        ax.set_xlabel(x_col)
-        ax.set_ylabel(y_col)
-        ax.grid(True, linestyle="--", alpha=0.3)
-        st.pyplot(fig)
-        plt.close(fig)
+        if step != 2:
+            ax.set_xlabel(x_col)
+            ax.set_ylabel(y_col)
+            ax.grid(True, linestyle="--", alpha=0.3)
+            st.pyplot(fig)
+            plt.close(fig)
 
     # ─── STEP 5 — Cluster Report Card ────────────────────────────────────
     else:
