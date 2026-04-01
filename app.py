@@ -55,17 +55,20 @@ if df is not None:
         if use_label:
             label_col = st.sidebar.selectbox("Class column", non_numeric)
 
-    # Show dataset size info — no sampling
-    st.sidebar.info(f"📦 Dataset loaded: **{len(df)} rows**")
+    MAX_POINTS = 500
+    if len(df) > MAX_POINTS:
+        st.sidebar.warning(f"⚠️ Dataset has {len(df)} rows. Sampling {MAX_POINTS} for performance.")
+        df = df.sample(MAX_POINTS, random_state=42).reset_index(drop=True)
 
 # -------------------------
-# AUTO EPSILON RANGE
+# AUTO EPSILON RANGE based on selected columns
 # -------------------------
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Parameters")
 
 if df is not None and len(numeric_cols) >= 2:
     col_range = float(df[x_col].max() - df[x_col].min())
+    # Dynamically set slider max and default based on data range
     if col_range > 100:
         eps_max     = round(col_range * 0.3, 1)
         eps_default = round(col_range * 0.05, 1)
@@ -89,6 +92,9 @@ else:
 
 min_samples = st.sidebar.slider("MinPts", 1, 10, 5)
 
+# -------------------------
+# SIDEBAR HINT
+# -------------------------
 st.sidebar.markdown("---")
 if df is not None:
     st.sidebar.info(
@@ -105,30 +111,31 @@ if df is not None:
     st.subheader("📊 Dataset Preview")
     st.dataframe(df.head(20))
     st.caption(
-        f"Showing first 20 of **{len(df)}** rows — "
+        f"Showing first 20 of {len(df)} rows — "
         f"Columns used: **{x_col}** (X) and **{y_col}** (Y)"
     )
 
     # -------------------------
-    # NEIGHBORS + CLASSIFICATION
+    # NEIGHBORS
     # -------------------------
-    with st.spinner(f"🔍 Computing neighbors for {len(df)} points..."):
-        nbrs = NearestNeighbors(radius=eps, n_jobs=-1).fit(X)
-        distances, indices = nbrs.radius_neighbors(X)
+    nbrs = NearestNeighbors(radius=eps).fit(X)
+    distances, indices = nbrs.radius_neighbors(X)
 
+    # -------------------------
+    # CLASSIFICATION
+    # -------------------------
     point_types = ["Noise"] * len(X)
 
-    with st.spinner("🏷️ Classifying Core / Border / Noise..."):
-        for i, neigh in enumerate(indices):
-            if len(neigh) >= min_samples:
-                point_types[i] = "Core"
+    for i, neigh in enumerate(indices):
+        if len(neigh) >= min_samples:
+            point_types[i] = "Core"
 
-        for i, neigh in enumerate(indices):
-            if point_types[i] != "Core":
-                for nb in neigh:
-                    if point_types[nb] == "Core":
-                        point_types[i] = "Border"
-                        break
+    for i, neigh in enumerate(indices):
+        if point_types[i] != "Core":
+            for nb in neigh:
+                if point_types[nb] == "Core":
+                    point_types[i] = "Border"
+                    break
 
     df_result = df[[x_col, y_col]].copy()
     df_result["Type"] = point_types
@@ -136,9 +143,8 @@ if df is not None:
     # -------------------------
     # DBSCAN
     # -------------------------
-    with st.spinner("🤖 Running DBSCAN..."):
-        model  = DBSCAN(eps=eps, min_samples=min_samples, n_jobs=-1)
-        labels = model.fit_predict(X)
+    model  = DBSCAN(eps=eps, min_samples=min_samples)
+    labels = model.fit_predict(X)
     df_result["Cluster"] = labels
 
     # -------------------------
@@ -177,21 +183,14 @@ if df is not None:
         st.dataframe(comparison)
 
     # -------------------------
-    # K-DISTANCE PLOT
+    # K-DISTANCE PLOT (helps user pick eps)
     # -------------------------
     st.subheader("📐 K-Distance Plot (helps choose ε)")
     st.caption("Find the 'elbow' point — that's your ideal ε value")
-
-    with st.spinner("📐 Computing K-Distance plot..."):
-        # Sample 2000 points for k-distance plot to keep it fast
-        sample_size = min(2000, len(X))
-        sample_idx  = np.random.choice(len(X), sample_size, replace=False)
-        X_sample    = X[sample_idx]
-
-        k = min_samples
-        nbrs_k      = NearestNeighbors(n_neighbors=k, n_jobs=-1).fit(X_sample)
-        k_distances, _ = nbrs_k.kneighbors(X_sample)
-        k_dist_sorted  = np.sort(k_distances[:, -1])[::-1]
+    k = min_samples
+    nbrs_k = NearestNeighbors(n_neighbors=k).fit(X)
+    k_distances, _ = nbrs_k.kneighbors(X)
+    k_dist_sorted  = np.sort(k_distances[:, -1])[::-1]
 
     fig_k, ax_k = plt.subplots(figsize=(8, 3))
     ax_k.plot(k_dist_sorted, color="steelblue", linewidth=1.5)
@@ -199,9 +198,7 @@ if df is not None:
                  linewidth=1, label=f"Current ε = {eps}")
     ax_k.set_xlabel("Points sorted by distance")
     ax_k.set_ylabel(f"{k}-NN Distance")
-    ax_k.set_title(
-        f"K-Distance Graph (k={k}, sampled {sample_size} pts) — Elbow = ideal ε"
-    )
+    ax_k.set_title(f"K-Distance Graph (k={k}) — Elbow = ideal ε")
     ax_k.legend()
     ax_k.grid(True, linestyle="--", alpha=0.3)
     st.pyplot(fig_k)
@@ -223,15 +220,14 @@ if df is not None:
     step = st.slider("Step", 1, 5, 1)
     st.caption(f"**{step_labels[step]}**")
 
-    # For large datasets skip annotations and circles
     show_annotations = len(X) <= 30
     show_circles     = len(X) <= 100
 
     color_map  = {"Core": "#2ecc71", "Border": "#f39c12", "Noise": "#e74c3c"}
     marker_map = {"Core": "o",       "Border": "s",       "Noise": "X"}
-    size_map   = {"Core": 10,        "Border": 8,         "Noise": 8}
+    size_map   = {"Core": 60,        "Border": 45,        "Noise": 45}
 
-    fig, ax = plt.subplots(figsize=(10, 7))
+    fig, ax = plt.subplots(figsize=(9, 6))
 
     # STEP 1 — Raw Data
     if step == 1:
@@ -243,19 +239,25 @@ if df is not None:
                 mask = classes == cls
                 ax.scatter(X[mask, 0], X[mask, 1],
                            color=cmap[idx % len(cmap)],
-                           s=5, label=str(cls), alpha=0.5, zorder=5)
-            ax.legend(title="Class", fontsize=8, markerscale=3)
-            ax.set_title(f"Step 1: Raw Data — colored by '{label_col}' ({len(X)} points)")
+                           s=30, label=str(cls), alpha=0.7, zorder=5)
+            ax.legend(title="Class", fontsize=8)
+            ax.set_title(f"Step 1: Raw Data — colored by '{label_col}'")
         else:
             ax.scatter(X[:, 0], X[:, 1],
-                       color="steelblue", s=5, alpha=0.5, zorder=5)
-            ax.set_title(f"Step 1: Raw Data — {len(X)} Points")
+                       color="steelblue", s=30, alpha=0.7, zorder=5)
+            ax.set_title("Step 1: Raw Data — All Points")
+
+        if show_annotations:
+            for i, (xi, yi) in enumerate(X):
+                ax.annotate(f"P{i+1}", (xi, yi),
+                            textcoords="offset points",
+                            xytext=(5, 3), fontsize=7)
         ax.margins(0.1)
 
     # STEP 2 — ε Neighborhoods
     elif step == 2:
         ax.scatter(X[:, 0], X[:, 1],
-                   color="steelblue", s=5, alpha=0.5, zorder=5)
+                   color="steelblue", s=30, alpha=0.7, zorder=5)
         if show_circles:
             for p in X:
                 circle = plt.Circle((p[0], p[1]), eps,
@@ -265,9 +267,9 @@ if df is not None:
             ax.set_aspect("equal")
             ax.autoscale_view()
         else:
-            st.info("ℹ️ ε circles hidden for large datasets to avoid clutter.")
+            st.info("ℹ️ ε circles hidden for datasets > 100 points to avoid clutter.")
         ax.margins(0.1)
-        ax.set_title(f"Step 2: ε = {eps} Neighborhoods ({len(X)} points)")
+        ax.set_title(f"Step 2: ε = {eps} Neighborhoods")
 
     # STEP 3 — Core / Border / Noise
     elif step == 3:
@@ -280,7 +282,10 @@ if df is not None:
                            marker=marker_map[ptype],
                            s=size_map[ptype],
                            label=f"{ptype} ({len(idxs)})",
-                           zorder=5, alpha=0.7)
+                           zorder=5,
+                           edgecolors="black",
+                           linewidths=0.3,
+                           alpha=0.8)
 
         if show_circles:
             for i, p in enumerate(X):
@@ -296,7 +301,7 @@ if df is not None:
             ax.autoscale_view()
 
         ax.margins(0.1)
-        ax.legend(title="Point Type", fontsize=9, markerscale=3)
+        ax.legend(title="Point Type", fontsize=9)
         ax.set_title("Step 3: 🟢 Core  🟠 Border  🔴 Noise")
 
     # STEP 4 — Cluster Expansion
@@ -307,17 +312,17 @@ if df is not None:
             pts = X[labels == l]
             if l == -1:
                 ax.scatter(pts[:, 0], pts[:, 1],
-                           color="#e74c3c", marker="x",
-                           s=5, label="Noise",
-                           zorder=4, alpha=0.4)
+                           color="#e74c3c", marker="X",
+                           s=40, label="Noise",
+                           zorder=5, alpha=0.7)
             else:
                 ax.scatter(pts[:, 0], pts[:, 1],
                            color=colors[l % len(colors)],
-                           s=5, label=f"Cluster {l}",
-                           zorder=5, alpha=0.6)
+                           s=40, label=f"Cluster {l}",
+                           zorder=5, alpha=0.7)
         ax.legend(title="Clusters", fontsize=8,
-                  loc="upper right", ncol=2, markerscale=3)
-        ax.set_title(f"Step 4: Cluster Expansion — {n_clusters} clusters found")
+                  loc="upper right", ncol=2)
+        ax.set_title("Step 4: Cluster Expansion")
         ax.margins(0.1)
 
     # STEP 5 — Final Result
@@ -344,7 +349,10 @@ if df is not None:
                            marker=marker_map[ptype],
                            s=size_map[ptype],
                            label=f"{ptype} ({len(idxs)})",
-                           zorder=5, alpha=0.7)
+                           zorder=5,
+                           edgecolors="black",
+                           linewidths=0.3,
+                           alpha=0.8)
 
         if show_annotations:
             type_short = {"Core": "C", "Border": "B", "Noise": "N"}
@@ -358,11 +366,8 @@ if df is not None:
                 )
 
         ax.margins(0.1)
-        ax.legend(title="Point Type", fontsize=9, markerscale=3)
-        ax.set_title(
-            f"Step 5: Final Result — 🟢 Core ({core_count})  "
-            f"🟠 Border ({border_count})  🔴 Noise ({noise_count})"
-        )
+        ax.legend(title="Point Type", fontsize=9)
+        ax.set_title("Step 5: Final Result — 🟢 Core  🟠 Border  🔴 Noise")
 
     ax.set_xlabel(x_col)
     ax.set_ylabel(y_col)
