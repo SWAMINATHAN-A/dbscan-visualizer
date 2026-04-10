@@ -247,9 +247,11 @@ if nav == "👥 About / Credits":
 # SIDEBAR — INPUT (only shown for Visualizer / Download)
 # ════════════════════════════════════════════════════════════════════
 st.sidebar.header("📥 Input")
-option = st.sidebar.radio("Input Method", ["Upload CSV", "Generate Random"])
+option = st.sidebar.radio("Input Method", ["Upload CSV", "Use Sample Dataset"])
 
 df = None
+
+SAMPLE_CSV_PATH = "large.csv"   # place large.csv in the same folder as app.py
 
 if option == "Upload CSV":
     file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
@@ -257,29 +259,32 @@ if option == "Upload CSV":
         df = pd.read_csv(file)
         df.columns = [c.strip().rstrip(":").strip() for c in df.columns]
 else:
-    n = int(st.sidebar.number_input("Number of Points", min_value=10, max_value=500, value=200, step=10))
-    n_clusters_gen = int(st.sidebar.number_input("Number of Blobs", min_value=1, max_value=10, value=4))
-    noise_frac = st.sidebar.slider("Noise Fraction", 0.0, 0.3, 0.05, step=0.01)
-    seed = int(st.sidebar.number_input("Random Seed", min_value=0, max_value=9999, value=42))
+    # ── Load the bundled MAGIC Gamma Telescope dataset ──────────────
+    import os
+    sample_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), SAMPLE_CSV_PATH)
 
-    rng = np.random.default_rng(seed)
-    centers = rng.uniform(1, 9, size=(n_clusters_gen, 2))
-    n_noise = int(n * noise_frac)
-    n_blob  = n - n_noise
+    if os.path.exists(sample_path):
+        @st.cache_data
+        def load_sample():
+            d = pd.read_csv(sample_path)
+            d.columns = [c.strip().rstrip(":").strip() for c in d.columns]
+            return d
 
-    points_per_blob = np.array_split(np.arange(n_blob), n_clusters_gen)
-    data = []
-    for ci, idx_group in enumerate(points_per_blob):
-        spread = rng.uniform(0.3, 1.0)
-        pts = rng.normal(loc=centers[ci], scale=spread, size=(len(idx_group), 2))
-        data.append(pts)
-    blob_pts = np.vstack(data)
-
-    noise_pts = rng.uniform(0, 10, size=(n_noise, 2))
-    all_pts   = np.vstack([blob_pts, noise_pts]) if n_noise > 0 else blob_pts
-
-    df = pd.DataFrame(all_pts, columns=["X", "Y"])
-    st.sidebar.success(f"✅ Generated {len(df)} points ({n_clusters_gen} blobs + {n_noise} noise)")
+        df = load_sample()
+        st.sidebar.success(
+            f"✅ Sample dataset loaded\n\n"
+            f"📄 **MAGIC Gamma Telescope**\n"
+            f"🔢 {len(df):,} rows · {len(df.columns)} columns"
+        )
+        st.sidebar.caption(
+            "Features: fLength, fWidth, fSize, fConc, fConc1, "
+            "fAsym, fM3Long, fM3Trans, fAlpha, fDist · Class: g / h"
+        )
+    else:
+        st.sidebar.error(
+            f"⚠️ `{SAMPLE_CSV_PATH}` not found next to app.py.\n\n"
+            "Please place `large.csv` in the same folder as `app.py` and restart."
+        )
 
 # ── Column Selection ─────────────────────────────────────────────────
 st.sidebar.markdown("---")
