@@ -28,7 +28,10 @@ Installation
 
 Make sure you have Python installed (>= 3.8)
 
+pip install streamlit pandas numpy matplotlib scikit-learn
+streamlit run app.py --server.port 8502
 Install dependencies
+
 
 ```bash
 pip install streamlit pandas numpy matplotlib scikit-learn
